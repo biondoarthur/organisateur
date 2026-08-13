@@ -448,3 +448,4 @@ document.addEventListener('submit', (event) => {
 
 organizeButton.addEventListener('click', organizeWeek)
 renderPage()
+
