@@ -35,8 +35,21 @@ test('échappe les champs ICS et ne duplique pas les UID lors d’une mise à jo
 })
 
 test('valide le contrat API du calendrier et rejette les données client invalides', () => {
-  const valid = { courses: [], homework: [], events: [], includeReviewReminders: false }
+  const valid = { courses: [], homework: [], events: [], plannerSessions: [], includeReviewReminders: false }
   assert.deepEqual(cleanCalendar(valid), valid)
   assert.throws(() => cleanCalendar({ ...valid, events: [{ id: 'bad', title: 'x' }] }), /Événement invalide/)
+  assert.throws(() => cleanCalendar({ ...valid, plannerSessions: [{ id, taskId: id, title: 'x', date: '2026-10-25', startTime: '18:00', endTime: '19:00', minutes: 60, status: 'broken' }] }), /Séance de travail invalide/)
   assert.throws(() => cleanCalendar({ ...valid, includeReviewReminders: 'true' }), /Données de calendrier invalides/)
+})
+
+test('exporte les séances acceptées et les événements récurrents avec des UID stables', () => {
+  const ics = buildCalendarIcs({
+    courses: [],
+    homework: [],
+    events: [{ id, title: 'Cours de piano', date: '2026-10-25', startTime: '18:00', endTime: '19:00', category: 'Personnel', recurrence: 'weekly', location: '', note: '' }],
+    plannerSessions: [{ id: '6ba7b811-9dad-11d1-80b4-00c04fd430c8', taskId: id, title: 'Réviser les fractions', date: '2026-10-24', startTime: '10:00', endTime: '10:45', minutes: 45, status: 'accepted' }],
+  })
+  assert.match(ics, /RRULE:FREQ=WEEKLY/)
+  assert.match(ics, /UID:study-6ba7b811-9dad-11d1-80b4-00c04fd430c8@mon-planning\.local/)
+  assert.doesNotMatch(ics, /status-proposed/)
 })

@@ -11,7 +11,7 @@ npm run desktop:package
 
 Le fichier créé se trouve dans :
 
-`release/Mon Planning-1.0.0-arm64.dmg`
+`release/Mon Planning-1.1.0-arm64.dmg`
 
 Il est prévu pour les Mac Apple Silicon (M1, M2, M3, M4…).
 

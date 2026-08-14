@@ -73,6 +73,7 @@ export function buildCalendarIcs(calendar) {
   const courses = Array.isArray(calendar.courses) ? calendar.courses : []
   const homework = Array.isArray(calendar.homework) ? calendar.homework : []
   const events = Array.isArray(calendar.events) ? calendar.events : []
+  const plannerSessions = Array.isArray(calendar.plannerSessions) ? calendar.plannerSessions.filter((session) => ['accepted', 'done'].includes(session.status)) : []
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Mon Planning//Calendrier personnel//FR', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Mon Planning']
 
   courses.forEach((course) => {
@@ -87,7 +88,8 @@ export function buildCalendarIcs(calendar) {
     })
   })
   homework.forEach((item) => lines.push(...allDayEventLines(item)))
-  events.forEach((event) => lines.push(...eventLines({ uid: `personal-${event.id}`, start: eventDateTime(event, 'startTime'), end: eventDateTime(event, 'endTime'), summary: event.title, description: `${event.category}.${event.note ? ` ${event.note}` : ''} Ajouté depuis Mon Planning.`, location: event.location })))
+  events.forEach((event) => lines.push(...eventLines({ uid: `personal-${event.id}`, start: eventDateTime(event, 'startTime'), end: eventDateTime(event, 'endTime'), summary: event.title, description: `${event.category}.${event.note ? ` ${event.note}` : ''} Ajouté depuis Mon Planning.`, location: event.location, recurrence: event.recurrence && event.recurrence !== 'none' ? `RRULE:FREQ=${event.recurrence.toUpperCase()}` : '' })))
+  plannerSessions.forEach((session) => lines.push(...eventLines({ uid: `study-${session.id}`, start: eventDateTime(session, 'startTime'), end: eventDateTime(session, 'endTime'), summary: session.title, description: 'Séance proposée par le planificateur intelligent de Mon Planning.' })))
   lines.push('END:VCALENDAR')
   return `${lines.map(foldLine).join('\r\n')}\r\n`
 }

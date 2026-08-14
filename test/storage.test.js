@@ -5,8 +5,10 @@ import {
   DATA_STORAGE_KEY,
   readCalendarSync,
   readPlanningData,
+  readPlanningSettings,
   writeCalendarSync,
   writePlanningData,
+  writePlanningSettings,
 } from '../src/lib/storage.js'
 
 function createStorage(initial = {}) {
@@ -51,7 +53,23 @@ test('écrit uniquement des données de planning et une configuration valide', (
   writePlanningData(storage, { courses: [firstCourse], homework: null, events: null })
   writeCalendarSync(storage, firstSync)
 
-  assert.deepEqual(JSON.parse(storage.getItem(DATA_STORAGE_KEY)), { courses: [firstCourse], homework: [], events: [] })
+  assert.deepEqual(JSON.parse(storage.getItem(DATA_STORAGE_KEY)), { courses: [firstCourse], homework: [], events: [], plannerSessions: [] })
   assert.deepEqual(JSON.parse(storage.getItem(CALENDAR_SYNC_STORAGE_KEY)), firstSync)
   assert.throws(() => writeCalendarSync(storage, { calendarId: 'invalid' }), /invalide/)
+})
+
+test('complète les informations utiles aux tâches sans effacer les anciennes entrées', () => {
+  const storage = createStorage({
+    [DATA_STORAGE_KEY]: JSON.stringify({ courses: [], homework: [{ id: 'task-1', subject: 'Maths', title: 'Exercices', dueDate: '2026-10-25', done: false }], events: [] }),
+  })
+  const data = readPlanningData(storage)
+  assert.equal(data.homework[0].estimatedMinutes, 60)
+  assert.equal(data.homework[0].priority, 2)
+  assert.deepEqual(data.plannerSessions, [])
+})
+
+test('conserve les préférences de calendrier et de notifications', () => {
+  const storage = createStorage()
+  writePlanningSettings(storage, { includeReviewReminders: true, notificationsEnabled: true })
+  assert.deepEqual(readPlanningSettings(storage), { includeReviewReminders: true, notificationsEnabled: true })
 })

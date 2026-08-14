@@ -1,11 +1,13 @@
 import { neon } from '@neondatabase/serverless'
 
-const allowedKeys = ['courses', 'homework', 'events', 'includeReviewReminders']
+const allowedKeys = ['courses', 'homework', 'events', 'plannerSessions', 'includeReviewReminders']
 const weekdays = new Set(['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'])
 const categories = new Set(['Personnel', 'Sport', 'Équitation', 'Rendez-vous', 'Sortie', 'Vacances', 'École', 'Autre'])
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const date = /^\d{4}-\d{2}-\d{2}$/
 const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/
+const recurrences = new Set(['none', 'weekly', 'monthly'])
+const sessionStatuses = new Set(['proposed', 'accepted', 'done'])
 
 function setCors(response) {
   response.setHeader('Access-Control-Allow-Origin', '*')
@@ -21,10 +23,11 @@ function cleanCalendar(value) {
   const calendar = {}
   allowedKeys.forEach((key) => { calendar[key] = value?.[key] ?? (key === 'includeReviewReminders' ? false : []) })
   if (!Array.isArray(calendar.courses) || !Array.isArray(calendar.homework) || !Array.isArray(calendar.events) || typeof calendar.includeReviewReminders !== 'boolean') throw new Error('Données de calendrier invalides.')
-  if (calendar.courses.length > 300 || calendar.homework.length > 1000 || calendar.events.length > 1000) throw new Error('Trop d’éléments dans le calendrier.')
+  if (calendar.courses.length > 300 || calendar.homework.length > 1000 || calendar.events.length > 1000 || calendar.plannerSessions.length > 2000) throw new Error('Trop d’éléments dans le calendrier.')
   calendar.courses.forEach((item) => { if (!uuid.test(item?.id || '') || !text(item.subject, 40) || !weekdays.has(item.day) || !time.test(item.time || '') || (item.room && !text(item.room, 40))) throw new Error('Cours invalide.') })
   calendar.homework.forEach((item) => { if (!uuid.test(item?.id || '') || !text(item.subject, 40) || !text(item.title, 100) || !date.test(item.dueDate || '') || typeof item.done !== 'boolean') throw new Error('Devoir invalide.') })
-  calendar.events.forEach((item) => { if (!uuid.test(item?.id || '') || !text(item.title, 100) || !date.test(item.date || '') || !time.test(item.startTime || '') || !time.test(item.endTime || '') || item.endTime <= item.startTime || !categories.has(item.category) || (item.location && !text(item.location, 100)) || (item.note && (!text(item.note, 300)))) throw new Error('Événement invalide.') })
+  calendar.events.forEach((item) => { if (!uuid.test(item?.id || '') || !text(item.title, 100) || !date.test(item.date || '') || !time.test(item.startTime || '') || !time.test(item.endTime || '') || item.endTime <= item.startTime || !categories.has(item.category) || !recurrences.has(item.recurrence || 'none') || (item.location && !text(item.location, 100)) || (item.note && (!text(item.note, 300)))) throw new Error('Événement invalide.') })
+  calendar.plannerSessions.forEach((item) => { if (!uuid.test(item?.id || '') || !uuid.test(item?.taskId || '') || !text(item.title, 120) || !date.test(item.date || '') || !time.test(item.startTime || '') || !time.test(item.endTime || '') || item.endTime <= item.startTime || !sessionStatuses.has(item.status) || !Number.isInteger(item.minutes) || item.minutes < 15 || item.minutes > 240) throw new Error('Séance de travail invalide.') })
   return calendar
 }
 

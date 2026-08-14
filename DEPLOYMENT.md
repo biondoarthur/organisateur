@@ -1,6 +1,6 @@
 # Déploiement Vercel et synchronisation Apple Calendar
 
-Ce projet utilise Vercel Functions et Neon Postgres. Les données synchronisées sont les cours, devoirs, événements personnels et le réglage des rappels de révision. Aucun mot de passe Apple ni identifiant iCloud n’est envoyé ou stocké.
+Ce projet utilise Vercel Functions et Neon Postgres. Les données synchronisées sont les cours, tâches, événements récurrents, séances de travail acceptées et le réglage des rappels de révision. Aucun mot de passe Apple ni identifiant iCloud n’est envoyé ou stocké.
 
 ## Ce qui est prêt dans le projet
 
