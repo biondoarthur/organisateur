@@ -1,25 +1,17 @@
 import './style.css'
-import { authConfiguration, authErrorMessage as formatAuthError, getCurrentSession, isAuthConfigured, signIn, signUp, signOut } from './auth.js'
-import { storageKeyForUser } from './lib/auth-utils.js'
+import { readCalendarSync, readPlanningData, writeCalendarSync, writePlanningData } from './lib/storage.js'
 
-const legacyStorageKey = 'mon-planning-data-v1'
-const legacySyncStorageKey = 'mon-planning-hosted-calendar-v1'
 const today = new Date()
-// Must exist before loadHostedSync() runs as part of the initial state.
-let currentSession = null
-let authRefreshPromise = null
-let authMutationInFlight = false
-let authResumePromise = null
 const state = {
   page: 'dashboard',
   calendarDate: new Date(today.getFullYear(), today.getMonth(), 1),
   includeReviewReminders: false,
   lastCalendarExportSignature: null,
   calendarExported: false,
-  hostedSync: loadHostedSync(),
+  hostedSync: readCalendarSync(localStorage),
   hostedSyncStatus: '',
   weeklySummary: '',
-  data: { courses: [], homework: [], events: [] },
+  data: readPlanningData(localStorage),
 }
 
 const icons = {
@@ -32,55 +24,12 @@ const categoryClasses = { Personnel: 'personal', Sport: 'sport', Équitation: 'r
 const pages = {
   dashboard: { label: 'Tableau de bord', title: 'Tableau de bord', icon: icons.dashboard },
   schedule: { label: 'Emploi du temps', title: 'Emploi du temps', icon: icons.schedule },
-  homework: { label: 'Devoirs', title: 'Mes devoirs', icon: icons.homework },
+  homework: { label: 'Devoirs', title: 'Devoirs', icon: icons.homework },
   calendar: { label: 'Calendrier', title: 'Calendrier', icon: icons.calendar },
 }
 
-function userStorageKey(key) {
-  const userId = currentSession?.user?.id
-  return storageKeyForUser(key, userId)
-}
-
-function loadData() {
-  const key = userStorageKey(legacyStorageKey)
-  if (!key) return { courses: [], homework: [], events: [] }
-  try {
-    const saved = JSON.parse(localStorage.getItem(key))
-    if (saved) return { courses: Array.isArray(saved.courses) ? saved.courses : [], homework: Array.isArray(saved.homework) ? saved.homework : [], events: Array.isArray(saved.events) ? saved.events : [] }
-    // Preserve data created before authentication existed, but migrate it only
-    // once so it can never appear in another account.
-    const legacy = JSON.parse(localStorage.getItem(legacyStorageKey))
-    if (legacy && !localStorage.getItem(`${legacyStorageKey}:migrated`)) {
-      localStorage.setItem(key, JSON.stringify(legacy))
-      localStorage.setItem(`${legacyStorageKey}:migrated`, '1')
-      return { courses: Array.isArray(legacy.courses) ? legacy.courses : [], homework: Array.isArray(legacy.homework) ? legacy.homework : [], events: Array.isArray(legacy.events) ? legacy.events : [] }
-    }
-    return { courses: [], homework: [], events: [] }
-  } catch {
-    return { courses: [], homework: [], events: [] }
-  }
-}
-
-function loadHostedSync() {
-  const key = userStorageKey(legacySyncStorageKey)
-  if (!key) return null
-  try {
-    let config = JSON.parse(localStorage.getItem(key))
-    if (!config && !localStorage.getItem(`${legacySyncStorageKey}:migrated`)) {
-      config = JSON.parse(localStorage.getItem(legacySyncStorageKey))
-      if (config) localStorage.setItem(key, JSON.stringify(config))
-      localStorage.setItem(`${legacySyncStorageKey}:migrated`, '1')
-    }
-    return /^[0-9a-f-]{36}$/i.test(config?.calendarId || '') && /^[0-9a-f-]{36}$/i.test(config?.editToken || '') ? config : null
-  } catch {
-    return null
-  }
-}
-
 function saveData() {
-  const key = userStorageKey(legacyStorageKey)
-  if (!key) return
-  localStorage.setItem(key, JSON.stringify(state.data))
+  writePlanningData(localStorage, state.data)
   queueHostedCalendarSync()
 }
 
@@ -121,7 +70,7 @@ async function activateHostedCalendarSync() {
     await sendHostedCalendar(config)
     state.hostedSync = config
     state.hostedSyncStatus = 'Synchronisation automatique active.'
-    localStorage.setItem(userStorageKey(legacySyncStorageKey), JSON.stringify(config))
+    writeCalendarSync(localStorage, config)
     renderPage()
     showToast('Flux automatique créé. Abonne-toi à son URL dans Apple Calendar.')
   } catch (error) {
@@ -316,16 +265,15 @@ let pageTitle
 let organizeButton
 let modalBackdrop
 function renderAppShell() {
-  const email = escapeHtml(currentSession?.user?.email || 'Mon compte')
   document.querySelector('#app').innerHTML = `
   <div class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#dashboard" aria-label="Mon Planning, tableau de bord"><span class="brand-mark">M</span><span>Mon <b>Planning</b></span></a>
-      <p class="nav-label">MON ESPACE</p>
+      <p class="nav-label">MON PLANNING</p>
       <nav aria-label="Navigation principale">
         ${Object.entries(pages).map(([key, page]) => `<button class="nav-button" data-page="${key}"><span class="nav-icon">${page.icon}</span><span>${page.label}</span></button>`).join('')}
       </nav>
-      <div class="sidebar-tip"><span>${icons.sparkles}</span><div><strong>${email}</strong><button class="account-link" data-sign-out>Se déconnecter</button></div></div>
+      <div class="sidebar-tip"><span>${icons.sparkles}</span><div><strong>Tout est prêt</strong><p>Ton planning est sauvegardé automatiquement sur cet appareil.</p></div></div>
     </aside>
     <main class="main-content">
       <header class="topbar"><div><p class="greeting">Bonjour ! <span>Prêt·e pour ta journée ?</span></p><h1 id="pageTitle">Tableau de bord</h1></div><div class="header-actions"><button class="button button-secondary" id="organizeButton"><span>${icons.sparkles}</span> Organiser ma semaine</button><button class="button button-primary" data-open-modal="homework"><span>${icons.plus}</span> Ajouter</button></div></header>
@@ -343,145 +291,11 @@ function renderAppShell() {
   organizeButton.addEventListener('click', organizeWeek)
 }
 
-function renderAuthLoading() {
-  document.querySelector('#app').innerHTML = '<main class="auth-page"><section class="auth-card auth-loading" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><p>Vérification de la session…</p></section></main>'
-}
-
-function renderAuthPage(mode = location.pathname === '/signup' ? 'signup' : 'login', message = '') {
-  const isSignup = mode === 'signup'
-  const authDisabled = isAuthConfigured ? '' : ' disabled'
-  document.querySelector('#app').innerHTML = `<main class="auth-page"><section class="auth-card"><a class="brand auth-brand" href="/login"><span class="brand-mark">M</span><span>Mon <b>Planning</b></span></a><p class="eyebrow">TON ESPACE PERSONNEL</p><h1>${isSignup ? 'Créer un compte' : 'Bon retour !'}</h1><p class="auth-intro">${isSignup ? 'Organise ta semaine en toute simplicité.' : 'Connecte-toi pour retrouver ton planning.'}</p><form id="authForm" data-mode="${mode}" novalidate><label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254" placeholder="prenom@exemple.fr"></label><label>Mot de passe<div class="password-field"><input name="password" type="password" autocomplete="${isSignup ? 'new-password' : 'current-password'}" required minlength="8" placeholder="Au moins 8 caractères"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>${isSignup ? '<label>Confirmer le mot de passe<div class="password-field"><input name="confirmPassword" type="password" autocomplete="new-password" required minlength="8" placeholder="Retape ton mot de passe"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>' : ''}<p class="auth-error" id="authError" role="alert">${escapeHtml(message)}</p><button class="button button-primary auth-submit" type="submit"${authDisabled}>${isSignup ? 'Créer mon compte' : 'Se connecter'}</button></form><p class="auth-switch">${isSignup ? 'Déjà un compte ?' : 'Pas encore de compte ?'} <a href="${isSignup ? '/login' : '/signup'}">${isSignup ? 'Se connecter' : 'Créer un compte'}</a></p></section></main>`
-}
-
-function showLogin(message = '') {
-  if (location.pathname !== '/login') history.replaceState({}, '', '/login')
-  renderAuthPage('login', message)
-}
-
-async function refreshAuth() {
-  if (authRefreshPromise) return authRefreshPromise
-  authRefreshPromise = refreshAuthOnce()
-  try {
-    return await authRefreshPromise
-  } finally {
-    authRefreshPromise = null
-  }
-}
-
-async function refreshAuthOnce() {
-  if (!isAuthConfigured) {
-    const message = authConfiguration.status === 'missing'
-      ? 'L’authentification doit être configurée avant de pouvoir se connecter.'
-      : 'L’URL de Neon Auth est invalide ou indisponible dans ce déploiement.'
-    if (location.pathname === '/signup') renderAuthPage('signup', message)
-    else showLogin(message)
-    return
-  }
-  try {
-    currentSession = await getCurrentSession()
-  } catch (error) {
-    console.error('Erreur de vérification de session:', error?.code || error?.name || 'unknown')
-    currentSession = null
-    showLogin('Impossible de vérifier la session. Réessaie dans un instant.')
-    return
-  }
-  if (!currentSession?.user?.id) {
-    if (location.pathname === '/signup') renderAuthPage('signup')
-    else showLogin()
-    return
-  }
-  state.data = loadData()
-  state.hostedSync = loadHostedSync()
-  renderAppShell()
-  renderPage()
-}
-
-async function handleAuthSubmit(event) {
-  event.preventDefault()
-  if (authMutationInFlight) return
-  const form = event.target
-  const error = document.querySelector('#authError')
-  const submit = form.querySelector('[type="submit"]')
-  const values = new FormData(form)
-  const email = String(values.get('email') || '').trim().toLowerCase()
-  const password = String(values.get('password') || '')
-  const isSignup = form.dataset.mode === 'signup'
-  error.textContent = ''
-  if (!email || !password || !form.checkValidity()) { error.textContent = 'Renseigne une adresse e-mail valide et un mot de passe d’au moins 8 caractères.'; return }
-  if (isSignup && password !== values.get('confirmPassword')) { error.textContent = 'Les mots de passe ne correspondent pas.'; return }
-  submit.disabled = true
-  submit.textContent = isSignup ? 'Création…' : 'Connexion…'
-  authMutationInFlight = true
-  try {
-    const result = isSignup ? await signUp(email, password) : await signIn(email, password)
-    if (result?.error) throw result.error
-    const session = await getCurrentSession()
-    if (!session?.user?.id) {
-      if (isSignup) { showLogin('Compte créé. Vérifie ton e-mail si Neon Auth te le demande, puis connecte-toi.'); return }
-      throw new Error('Connexion impossible. Vérifie tes identifiants puis réessaie.')
-    }
-    currentSession = session
-    history.replaceState({}, '', '/')
-    await refreshAuth()
-  } catch (cause) {
-    error.textContent = formatAuthError(cause)
-    submit.disabled = false
-    submit.textContent = isSignup ? 'Créer mon compte' : 'Se connecter'
-  } finally {
-    authMutationInFlight = false
-  }
-}
-
-function clearCurrentSession() {
-  currentSession = null
-  state.data = { courses: [], homework: [], events: [] }
-  state.hostedSync = null
-}
-
-async function handleSignOut() {
-  try {
-    await signOut()
-  } catch (cause) {
-    showToast(formatAuthError(cause, 'La déconnexion a échoué.'))
-    return
-  }
-  clearCurrentSession()
-  showLogin()
-}
-
-async function verifySessionOnResume() {
-  if (!currentSession || authResumePromise) return
-  authResumePromise = (async () => {
-    try {
-      const session = await getCurrentSession()
-      if (!session?.user?.id) {
-        clearCurrentSession()
-        showLogin('Ta session a expiré. Connecte-toi à nouveau.')
-        return
-      }
-      if (session.user.id !== currentSession.user.id) {
-        currentSession = session
-        state.data = loadData()
-        state.hostedSync = loadHostedSync()
-        renderAppShell()
-        renderPage()
-      } else {
-        currentSession = session
-      }
-    } catch {
-      // A transient network error must not log the user out locally.
-    } finally {
-      authResumePromise = null
-    }
-  })()
-  await authResumePromise
-}
-
 function renderDashboard() {
   const upcoming = state.data.homework.filter((item) => !item.done).sort((a, b) => a.dueDate.localeCompare(b.dueDate))
   const completed = state.data.homework.filter((item) => item.done).length
   return `
-    <section class="hero-card"><div><p class="eyebrow">TON ESPACE D’ORGANISATION</p><h2>Une semaine sereine<br>commence ici.</h2><p>Centralise tes cours, garde le cap sur tes devoirs et avance à ton rythme.</p><button class="text-button" data-open-modal="homework">Ajouter mon premier devoir <span>→</span></button></div><span class="hero-art">✦</span></section>
+    <section class="hero-card"><div><p class="eyebrow">TON PLANNING</p><h2>Une semaine sereine<br>commence ici.</h2><p>Centralise tes cours, garde le cap sur tes devoirs et avance à ton rythme.</p><button class="text-button" data-open-modal="homework">Ajouter un devoir <span>→</span></button></div><span class="hero-art">✦</span></section>
     <section class="stat-grid" aria-label="Résumé de la semaine">
       <article class="stat-card purple"><span class="stat-icon">${icons.book}</span><p>COURS</p><strong>${state.data.courses.length}</strong><small>enregistré${state.data.courses.length > 1 ? 's' : ''}</small></article>
       <article class="stat-card orange"><span class="stat-icon">${icons.homework}</span><p>DEVOIRS À FAIRE</p><strong>${upcoming.length}</strong><small>${upcoming.length ? 'à ne pas oublier' : 'tout est à jour !'}</small></article>
@@ -507,7 +321,7 @@ function renderHomework() {
 function renderSchedule() {
   const days = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi']
   const coursesByDay = (day) => state.data.courses.filter((course) => course.day === day).sort((a, b) => a.time.localeCompare(b.time))
-  return `<section class="page-intro"><div><p class="eyebrow">TA SEMAINE EN UN COUP D’ŒIL</p><h2>Mes cours</h2><p>Retrouve facilement les horaires et salles de chaque cours.</p></div><button class="button button-primary" data-open-modal="course"><span>${icons.plus}</span> Ajouter un cours</button></section>
+  return `<section class="page-intro"><div><p class="eyebrow">TA SEMAINE EN UN COUP D’ŒIL</p><h2>Cours</h2><p>Retrouve facilement les horaires et salles de chaque cours.</p></div><button class="button button-primary" data-open-modal="course"><span>${icons.plus}</span> Ajouter un cours</button></section>
     <section class="schedule-board">${days.map((day) => `<div class="day-column"><div class="day-title"><h3>${day}</h3><span>${coursesByDay(day).length} cours</span></div><div class="day-courses">${coursesByDay(day).length ? coursesByDay(day).map((course) => `<article class="course-card"><span class="course-time">${escapeHtml(course.time)}</span><div><h4>${escapeHtml(course.subject)}</h4><p>${escapeHtml(course.room || 'Salle non précisée')}</p></div><button class="icon-button delete-button" data-delete-course="${course.id}" aria-label="Supprimer ce cours">${icons.trash}</button></article>`).join('') : `<div class="day-empty">Aucun cours</div>`}</div></div>`).join('')}</section>`
 }
 
@@ -529,14 +343,14 @@ function renderCalendar() {
     return `<div class="calendar-cell ${isToday ? 'is-today' : ''}"><strong>${day}</strong>${events.map((item) => `<article class="calendar-event personal-event category-${categoryClasses[item.category] || 'other'}" title="${escapeHtml(item.title)} · ${escapeHtml(item.startTime)} à ${escapeHtml(item.endTime)}"><span>${escapeHtml(item.startTime)} ${escapeHtml(item.title)}</span><button data-delete-event="${item.id}" aria-label="Supprimer l’événement ${escapeHtml(item.title)}">${icons.close}</button></article>`).join('')}${homework.map((item) => `<span class="calendar-event school-event ${item.done ? 'is-done' : ''}" title="Devoir · ${escapeHtml(item.subject)} : ${escapeHtml(item.title)}">${escapeHtml(item.subject)}</span>`).join('')}</div>`
   }).join('')
   const canExport = state.data.courses.length || state.data.homework.length || state.data.events.length
-  const reminderOption = state.data.courses.length ? `<label class="toggle-control"><input type="checkbox" data-include-reminders ${state.includeReviewReminders ? 'checked' : ''}><span class="toggle-track"></span><span><strong>Inclure les rappels J+3 / J+7</strong><small>Deux créneaux de révision à 19 h après chaque prochain cours.</small></span></label>` : '<p class="sync-no-reminder">Les rappels J+3 / J+7 sont proposés lorsque ton emploi du temps contient des cours.</p>'
-  const syncContent = canExport ? `<div class="sync-actions">${reminderOption}<button class="button button-primary" data-export-calendar><span>⌄</span> Synchroniser avec Apple Calendar</button></div>` : emptyState(icons.calendar, 'Ajoute un événement ou un cours', 'Ton calendrier personnel pourra ensuite être exporté vers Apple Calendar.', '<button class="button button-secondary" data-open-modal="event">Ajouter un événement</button>')
+  const reminderOption = state.data.courses.length ? `<label class="toggle-control"><input type="checkbox" data-include-reminders ${state.includeReviewReminders ? 'checked' : ''}><span class="toggle-track"></span><span><strong>Inclure les rappels J+3 / J+7</strong><small>Deux créneaux de révision à 19 h après chaque prochain cours.</small></span></label>` : '<p class="sync-no-reminder">Les rappels J+3 / J+7 apparaissent dès qu’un cours est ajouté.</p>'
+  const syncContent = canExport ? `<div class="sync-actions">${reminderOption}<button class="button button-primary" data-export-calendar><span>⌄</span> Exporter vers Apple Calendar</button></div>` : emptyState(icons.calendar, 'Ajoute un événement ou un cours', 'Ton calendrier pourra ensuite être exporté vers Apple Calendar.', '<button class="button button-secondary" data-open-modal="event">Ajouter un événement</button>')
   const exportHelp = state.calendarExported ? `<div class="sync-help"><strong>Fichier généré !</strong><span>Sur Mac, ouvre le fichier téléchargé ou utilise Calendrier → Fichier → Importer. Sur iPhone ou iPad, envoie le fichier .ics vers l’appareil puis ouvre-le depuis Fichiers ou Mail pour l’ajouter à Calendrier.</span></div>` : ''
   const automaticSync = state.hostedSync ? `<div class="hosted-sync-active"><strong>Synchronisation automatique active</strong><p>${state.hostedSyncStatus || 'Chaque modification est envoyée vers ton flux privé.'}</p><div class="feed-url"><input id="hostedFeedUrl" value="${escapeHtml(hostedFeedUrl())}" readonly aria-label="URL privée du calendrier"><button class="button button-secondary" data-copy-hosted-feed>Copier le lien</button></div><p class="sync-note">Abonne-toi une seule fois à ce lien dans Apple Calendar. Ne le partage pas : il donne accès à ton calendrier en lecture seule.</p></div>` : `<div class="hosted-sync-intro"><p>Crée un lien privé au format .ics. Les modifications de tes cours, devoirs et événements seront ensuite envoyées automatiquement ; Apple Calendar actualisera l’abonnement à son rythme.</p><button class="button button-primary" data-enable-hosted-sync>Activer la synchronisation automatique</button>${state.hostedSyncStatus ? `<p class="sync-error">${escapeHtml(state.hostedSyncStatus)}</p>` : ''}</div>`
   return `<section class="calendar-header"><div><p class="eyebrow">MON TEMPS, MES PROJETS</p><h2>${monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}</h2><p class="calendar-subtitle">École, loisirs, rendez-vous : tout ton quotidien au même endroit.</p></div><div class="calendar-header-actions"><button class="button button-primary" data-open-modal="event"><span>${icons.plus}</span> Ajouter un événement</button><div class="month-controls"><button class="icon-button" data-calendar-nav="previous" aria-label="Mois précédent">${icons.arrowLeft}</button><button class="button button-secondary" data-calendar-today>Aujourd’hui</button><button class="icon-button" data-calendar-nav="next" aria-label="Mois suivant">${icons.arrowRight}</button></div></div></section>
     <section class="panel calendar-panel"><div class="calendar-weekdays"><span>Lun</span><span>Mar</span><span>Mer</span><span>Jeu</span><span>Ven</span><span>Sam</span><span>Dim</span></div><div class="calendar-grid">${cells}</div></section>
-    <section class="panel hosted-sync-panel"><div class="sync-heading"><div><p class="eyebrow">SYNCHRONISATION AUTOMATIQUE</p><h2>Garde Apple Calendar à jour</h2><p>Sans connexion iCloud : Apple s’abonne à un flux privé généré par Mon Planning.</p></div><span class="sync-icon">↻</span></div>${automaticSync}</section>
-    <section class="panel sync-panel"><div class="sync-heading"><div><p class="eyebrow">SYNCHRONISATION</p><h2>Envoie ton calendrier vers Apple Calendar</h2><p>Événements personnels et emploi du temps sont réunis dans un fichier .ics créé sur ton appareil. Aucune connexion ni donnée iCloud n’est demandée.</p></div><span class="sync-icon">◷</span></div>${syncContent}${exportHelp}<p class="sync-note">Les événements conservent des identifiants stables afin d’éviter les doublons lors d’un nouvel export. <a href="https://support.apple.com/fr-fr/guide/calendar/icl1023/mac" target="_blank" rel="noreferrer">Aide Apple pour importer un fichier .ics</a></p></section>`
+    <section class="panel hosted-sync-panel"><div class="sync-heading"><div><p class="eyebrow">SYNCHRONISATION AUTOMATIQUE</p><h2>Garde Apple Calendar à jour</h2><p>Apple s’abonne à un flux privé généré par Mon Planning.</p></div><span class="sync-icon">↻</span></div>${automaticSync}</section>
+    <section class="panel sync-panel"><div class="sync-heading"><div><p class="eyebrow">SYNCHRONISATION</p><h2>Envoie ton calendrier vers Apple Calendar</h2><p>Événements personnels et emploi du temps sont réunis dans un fichier .ics créé sur cet appareil. Aucune donnée iCloud n’est demandée.</p></div><span class="sync-icon">◷</span></div>${syncContent}${exportHelp}<p class="sync-note">Les événements conservent des identifiants stables afin d’éviter les doublons lors d’un nouvel export. <a href="https://support.apple.com/fr-fr/guide/calendar/icl1023/mac" target="_blank" rel="noreferrer">Aide Apple pour importer un fichier .ics</a></p></section>`
 }
 
 function renderPage() {
@@ -587,9 +401,6 @@ function organizeWeek() {
 }
 
 document.addEventListener('click', (event) => {
-  const togglePassword = event.target.closest('[data-toggle-password]')
-  if (togglePassword) { const input = togglePassword.parentElement.querySelector('input'); input.type = input.type === 'password' ? 'text' : 'password'; togglePassword.textContent = input.type === 'password' ? 'Afficher' : 'Masquer'; return }
-  if (event.target.closest('[data-sign-out]')) { void handleSignOut(); return }
   const pageButton = event.target.closest('[data-page]')
   if (pageButton) { state.page = pageButton.dataset.page; renderPage(); return }
   const modalButton = event.target.closest('[data-open-modal]')
@@ -621,7 +432,6 @@ document.addEventListener('change', (event) => {
 })
 
 document.addEventListener('submit', (event) => {
-  if (event.target.id === 'authForm') { void handleAuthSubmit(event); return }
   if (event.target.id !== 'addForm') return
   event.preventDefault()
   const form = new FormData(event.target)
@@ -633,11 +443,5 @@ document.addEventListener('submit', (event) => {
   saveData(); closeModal(); renderPage(); showToast(event.target.dataset.type === 'homework' ? 'Devoir ajouté à ta liste.' : event.target.dataset.type === 'event' ? 'Événement ajouté à ton calendrier.' : 'Cours ajouté à ton emploi du temps.')
 })
 
-window.addEventListener('focus', () => { void verifySessionOnResume() })
-window.addEventListener('online', () => { void verifySessionOnResume() })
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void verifySessionOnResume()
-})
-
-renderAuthLoading()
-refreshAuth()
+renderAppShell()
+renderPage()
