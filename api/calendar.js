@@ -7,6 +7,12 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const date = /^\d{4}-\d{2}-\d{2}$/
 const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/
 
+function setCors(response) {
+  response.setHeader('Access-Control-Allow-Origin', '*')
+  response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+}
+
 function text(value, limit) {
   return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= limit
 }
@@ -23,6 +29,8 @@ function cleanCalendar(value) {
 }
 
 export default async function handler(request, response) {
+  setCors(response)
+  if (request.method === 'OPTIONS') return response.status(204).end()
   if (request.method !== 'POST') return response.status(405).json({ error: 'Méthode non autorisée.' })
   if (!process.env.DATABASE_URL) return response.status(503).json({ error: 'Le serveur de synchronisation n’est pas encore configuré.' })
   const { calendarId, editToken, calendar } = request.body || {}

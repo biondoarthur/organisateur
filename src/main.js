@@ -1,4 +1,5 @@
 import './style.css'
+import { apiUrl } from './lib/api.js'
 import { readCalendarSync, readPlanningData, writeCalendarSync, writePlanningData } from './lib/storage.js'
 
 const today = new Date()
@@ -38,11 +39,11 @@ function calendarPayload() {
 }
 
 function hostedFeedUrl(config = state.hostedSync) {
-  return `${window.location.origin}/api/calendar.ics?id=${config.calendarId}`
+  return `${apiUrl('/api/calendar.ics')}?id=${config.calendarId}`
 }
 
 async function sendHostedCalendar(config) {
-  const response = await fetch('/api/calendar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...config, calendar: calendarPayload() }) })
+  const response = await fetch(apiUrl('/api/calendar'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...config, calendar: calendarPayload() }) })
   const result = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(result.error || 'Synchronisation impossible.')
 }
