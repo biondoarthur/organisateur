@@ -3,17 +3,18 @@ import { diagnoseAuthConfiguration } from './auth-utils.js'
 
 const authUrl = import.meta.env.VITE_NEON_AUTH_URL
 
-export const authConfiguration = diagnoseAuthConfiguration()
-export const isAuthConfigured = authConfiguration.status === 'configured'
+const configuration = diagnoseAuthConfiguration()
 
 let authClient = null
-if (isAuthConfigured) {
+if (configuration.status === 'configured') {
   try {
     authClient = createAuthClient(authUrl)
   } catch {
     authClient = null
-    authConfiguration.status = 'unavailable'
+    configuration.status = 'unavailable'
   }
 }
 
+export const authConfiguration = configuration
+export const isAuthConfigured = Boolean(authClient)
 export { authClient }

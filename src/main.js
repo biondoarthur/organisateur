@@ -7,6 +7,9 @@ const legacySyncStorageKey = 'mon-planning-hosted-calendar-v1'
 const today = new Date()
 // Must exist before loadHostedSync() runs as part of the initial state.
 let currentSession = null
+let authRefreshPromise = null
+let authMutationInFlight = false
+let authResumePromise = null
 const state = {
   page: 'dashboard',
   calendarDate: new Date(today.getFullYear(), today.getMonth(), 1),
@@ -346,15 +349,32 @@ function renderAuthLoading() {
 
 function renderAuthPage(mode = location.pathname === '/signup' ? 'signup' : 'login', message = '') {
   const isSignup = mode === 'signup'
-  document.querySelector('#app').innerHTML = `<main class="auth-page"><section class="auth-card"><a class="brand auth-brand" href="/login"><span class="brand-mark">M</span><span>Mon <b>Planning</b></span></a><p class="eyebrow">TON ESPACE PERSONNEL</p><h1>${isSignup ? 'Créer un compte' : 'Bon retour !'}</h1><p class="auth-intro">${isSignup ? 'Organise ta semaine en toute simplicité.' : 'Connecte-toi pour retrouver ton planning.'}</p><form id="authForm" data-mode="${mode}" novalidate><label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254" placeholder="prenom@exemple.fr"></label><label>Mot de passe<div class="password-field"><input name="password" type="password" autocomplete="${isSignup ? 'new-password' : 'current-password'}" required minlength="8" placeholder="Au moins 8 caractères"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>${isSignup ? '<label>Confirmer le mot de passe<div class="password-field"><input name="confirmPassword" type="password" autocomplete="new-password" required minlength="8" placeholder="Retape ton mot de passe"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>' : ''}<p class="auth-error" id="authError" role="alert">${escapeHtml(message)}</p><button class="button button-primary auth-submit" type="submit">${isSignup ? 'Créer mon compte' : 'Se connecter'}</button></form><p class="auth-switch">${isSignup ? 'Déjà un compte ?' : 'Pas encore de compte ?'} <a href="${isSignup ? '/login' : '/signup'}">${isSignup ? 'Se connecter' : 'Créer un compte'}</a></p></section></main>`
+  const authDisabled = isAuthConfigured ? '' : ' disabled'
+  document.querySelector('#app').innerHTML = `<main class="auth-page"><section class="auth-card"><a class="brand auth-brand" href="/login"><span class="brand-mark">M</span><span>Mon <b>Planning</b></span></a><p class="eyebrow">TON ESPACE PERSONNEL</p><h1>${isSignup ? 'Créer un compte' : 'Bon retour !'}</h1><p class="auth-intro">${isSignup ? 'Organise ta semaine en toute simplicité.' : 'Connecte-toi pour retrouver ton planning.'}</p><form id="authForm" data-mode="${mode}" novalidate><label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254" placeholder="prenom@exemple.fr"></label><label>Mot de passe<div class="password-field"><input name="password" type="password" autocomplete="${isSignup ? 'new-password' : 'current-password'}" required minlength="8" placeholder="Au moins 8 caractères"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>${isSignup ? '<label>Confirmer le mot de passe<div class="password-field"><input name="confirmPassword" type="password" autocomplete="new-password" required minlength="8" placeholder="Retape ton mot de passe"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>' : ''}<p class="auth-error" id="authError" role="alert">${escapeHtml(message)}</p><button class="button button-primary auth-submit" type="submit"${authDisabled}>${isSignup ? 'Créer mon compte' : 'Se connecter'}</button></form><p class="auth-switch">${isSignup ? 'Déjà un compte ?' : 'Pas encore de compte ?'} <a href="${isSignup ? '/login' : '/signup'}">${isSignup ? 'Se connecter' : 'Créer un compte'}</a></p></section></main>`
+}
+
+function showLogin(message = '') {
+  if (location.pathname !== '/login') history.replaceState({}, '', '/login')
+  renderAuthPage('login', message)
 }
 
 async function refreshAuth() {
+  if (authRefreshPromise) return authRefreshPromise
+  authRefreshPromise = refreshAuthOnce()
+  try {
+    return await authRefreshPromise
+  } finally {
+    authRefreshPromise = null
+  }
+}
+
+async function refreshAuthOnce() {
   if (!isAuthConfigured) {
     const message = authConfiguration.status === 'missing'
       ? 'L’authentification doit être configurée avant de pouvoir se connecter.'
       : 'L’URL de Neon Auth est invalide ou indisponible dans ce déploiement.'
-    renderAuthPage(location.pathname === '/signup' ? 'signup' : 'login', message)
+    if (location.pathname === '/signup') renderAuthPage('signup', message)
+    else showLogin(message)
     return
   }
   try {
@@ -362,11 +382,12 @@ async function refreshAuth() {
   } catch (error) {
     console.error('Erreur de vérification de session:', error?.code || error?.name || 'unknown')
     currentSession = null
-    renderAuthPage('login', 'Impossible de vérifier la session. Réessaie dans un instant.')
+    showLogin('Impossible de vérifier la session. Réessaie dans un instant.')
     return
   }
   if (!currentSession?.user?.id) {
-    renderAuthPage()
+    if (location.pathname === '/signup') renderAuthPage('signup')
+    else showLogin()
     return
   }
   state.data = loadData()
@@ -377,6 +398,7 @@ async function refreshAuth() {
 
 async function handleAuthSubmit(event) {
   event.preventDefault()
+  if (authMutationInFlight) return
   const form = event.target
   const error = document.querySelector('#authError')
   const submit = form.querySelector('[type="submit"]')
@@ -389,12 +411,13 @@ async function handleAuthSubmit(event) {
   if (isSignup && password !== values.get('confirmPassword')) { error.textContent = 'Les mots de passe ne correspondent pas.'; return }
   submit.disabled = true
   submit.textContent = isSignup ? 'Création…' : 'Connexion…'
+  authMutationInFlight = true
   try {
     const result = isSignup ? await signUp(email, password) : await signIn(email, password)
     if (result?.error) throw result.error
     const session = await getCurrentSession()
     if (!session?.user?.id) {
-      if (isSignup) { renderAuthPage('login', 'Compte créé. Vérifie ton e-mail si Neon Auth te le demande, puis connecte-toi.'); return }
+      if (isSignup) { showLogin('Compte créé. Vérifie ton e-mail si Neon Auth te le demande, puis connecte-toi.'); return }
       throw new Error('Connexion impossible. Vérifie tes identifiants puis réessaie.')
     }
     currentSession = session
@@ -404,7 +427,15 @@ async function handleAuthSubmit(event) {
     error.textContent = formatAuthError(cause)
     submit.disabled = false
     submit.textContent = isSignup ? 'Créer mon compte' : 'Se connecter'
+  } finally {
+    authMutationInFlight = false
   }
+}
+
+function clearCurrentSession() {
+  currentSession = null
+  state.data = { courses: [], homework: [], events: [] }
+  state.hostedSync = null
 }
 
 async function handleSignOut() {
@@ -414,12 +445,38 @@ async function handleSignOut() {
     showToast(formatAuthError(cause, 'La déconnexion a échoué.'))
     return
   }
-  currentSession = null
-  state.data = { courses: [], homework: [], events: [] }
-  state.hostedSync = null
-  history.replaceState({}, '', '/login')
-  renderAuthPage('login')
+  clearCurrentSession()
+  showLogin()
 }
+
+async function verifySessionOnResume() {
+  if (!currentSession || authResumePromise) return
+  authResumePromise = (async () => {
+    try {
+      const session = await getCurrentSession()
+      if (!session?.user?.id) {
+        clearCurrentSession()
+        showLogin('Ta session a expiré. Connecte-toi à nouveau.')
+        return
+      }
+      if (session.user.id !== currentSession.user.id) {
+        currentSession = session
+        state.data = loadData()
+        state.hostedSync = loadHostedSync()
+        renderAppShell()
+        renderPage()
+      } else {
+        currentSession = session
+      }
+    } catch {
+      // A transient network error must not log the user out locally.
+    } finally {
+      authResumePromise = null
+    }
+  })()
+  await authResumePromise
+}
+
 function renderDashboard() {
   const upcoming = state.data.homework.filter((item) => !item.done).sort((a, b) => a.dueDate.localeCompare(b.dueDate))
   const completed = state.data.homework.filter((item) => item.done).length
@@ -574,6 +631,12 @@ document.addEventListener('submit', (event) => {
     state.data.events.push({ id: crypto.randomUUID(), title: form.get('title').trim(), date: form.get('date'), startTime: form.get('startTime'), endTime: form.get('endTime'), category: form.get('category'), location: form.get('location').trim(), note: form.get('note').trim() })
   } else state.data.courses.push({ id: crypto.randomUUID(), subject: form.get('subject').trim(), day: form.get('day'), time: form.get('time'), room: form.get('room').trim() })
   saveData(); closeModal(); renderPage(); showToast(event.target.dataset.type === 'homework' ? 'Devoir ajouté à ta liste.' : event.target.dataset.type === 'event' ? 'Événement ajouté à ton calendrier.' : 'Cours ajouté à ton emploi du temps.')
+})
+
+window.addEventListener('focus', () => { void verifySessionOnResume() })
+window.addEventListener('online', () => { void verifySessionOnResume() })
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void verifySessionOnResume()
 })
 
 renderAuthLoading()
