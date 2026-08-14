@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Télécharger Mon Planning pour macOS" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Mon Planning — Installation</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+        color: #172033;
+        background: #f5f7fb;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      main {
+        width: min(100%, 560px);
+        padding: 48px 40px;
+        text-align: center;
+        background: #fff;
+        border: 1px solid #e3e8f2;
+        border-radius: 24px;
+        box-shadow: 0 18px 50px rgb(33 53 88 / 10%);
+      }
+
+      .mark {
+        width: 72px;
+        height: 72px;
+        margin: 0 auto 24px;
+        display: grid;
+        place-items: center;
+        border-radius: 20px;
+        color: #fff;
+        background: linear-gradient(145deg, #5677ff, #7559dc);
+        font-size: 34px;
+        font-weight: 700;
+      }
+
+      h1 { margin: 0 0 12px; font-size: clamp(2rem, 7vw, 3rem); letter-spacing: -0.04em; }
+      p { margin: 0 auto; max-width: 420px; color: #61708a; line-height: 1.6; }
+
+      .download {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        margin-top: 30px;
+        padding: 0 28px;
+        color: #fff;
+        background: #536cf4;
+        border-radius: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        transition: transform .15s ease, background .15s ease;
+      }
+
+      .download:hover { background: #4059df; transform: translateY(-1px); }
+      .note { margin-top: 18px; font-size: .9rem; }
+
+      @media (max-width: 480px) {
+        main { padding: 36px 24px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">M</div>
+      <h1>Mon Planning</h1>
+      <p>Organisez vos cours, devoirs et événements directement sur votre Mac.</p>
+      <a class="download" href="https://github.com/biondoarthur/organisateur/releases/download/v1.0.0/Mon%20Planning-1.0.0-arm64.dmg">
+        Télécharger pour macOS
+      </a>
+      <p class="note">Version Apple Silicon · macOS 11 ou version ultérieure</p>
+    </main>
+  </body>
+</html>
