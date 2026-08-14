@@ -7,16 +7,20 @@ Ce projet utilise Vercel Functions et Neon Postgres. Les données synchronisées
 - `npm run build` génère le site statique dans `dist/`.
 - `vercel.json` indique à Vercel d’installer les dépendances avec `npm ci`, puis d’exécuter ce build.
 - Les fonctions `api/calendar.js` et `api/calendar.ics.js` sont déployées automatiquement par Vercel.
-- `.env*`, `.vercel` et les secrets restent exclus de Git.
+- `.env*`, `.vercel` et les secrets restent exclus de Git. Le modèle sans secret est fourni dans `.env.example`.
 
 ## Mise en ligne gratuite
 
 1. Créez un dépôt GitHub privé ou public, puis envoyez ce projet avec `git add .`, `git commit` et `git push`.
 2. Créez un projet gratuit sur [Neon](https://neon.com), puis copiez sa chaîne de connexion `DATABASE_URL`.
 3. Sur [Vercel](https://vercel.com), importez le dépôt GitHub et laissez les valeurs détectées : **Build Command** `npm run build` et **Output Directory** `dist`.
-4. Dans **Vercel → Settings → Environment Variables**, ajoutez `DATABASE_URL` pour Production, Preview et Development. Ne l’ajoutez jamais dans le code, GitHub ou le navigateur.
+4. Dans **Vercel → Settings → Environment Variables**, ajoutez `DATABASE_URL` pour Production, Preview et Development. Ajoutez aussi `VITE_NEON_AUTH_URL`, l’URL publique de Neon Auth. Ne placez jamais `DATABASE_URL` dans le code, GitHub ou le navigateur.
 5. Déployez. Votre URL `*.vercel.app` est alors utilisable depuis tous vos appareils, même lorsque le Mac est éteint.
 6. Dans l’application déployée, ouvrez **Calendrier**, activez « Synchronisation automatique », puis copiez l’URL du flux.
 7. Dans Apple Calendar, abonnez-vous à cette URL : sur Mac, **Fichier → Nouvel abonnement à un calendrier** ; sur iPhone/iPad, **Calendriers → Ajouter un calendrier → Ajouter un calendrier avec abonnement**.
 
 L’URL contient un identifiant aléatoire non devinable : traitez-la comme un lien privé. Apple choisit sa fréquence de rafraîchissement ; ce flux est donc automatiquement mis à jour après une modification dans Mon Planning, puis visible dans Apple Calendar lors de sa prochaine actualisation.
+
+## Neon Auth
+
+Activez l’authentification e-mail/mot de passe dans Neon Auth et configurez l’URL de retour de votre déploiement Vercel. Si la vérification e-mail est activée dans Neon, l’application confirme la création du compte puis invite la personne à vérifier son e-mail avant de se connecter.

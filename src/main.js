@@ -1,8 +1,12 @@
 import './style.css'
+import { authConfiguration, authErrorMessage as formatAuthError, getCurrentSession, isAuthConfigured, signIn, signUp, signOut } from './auth.js'
+import { storageKeyForUser } from './lib/auth-utils.js'
 
-const storageKey = 'mon-planning-data-v1'
-const syncStorageKey = 'mon-planning-hosted-calendar-v1'
+const legacyStorageKey = 'mon-planning-data-v1'
+const legacySyncStorageKey = 'mon-planning-hosted-calendar-v1'
 const today = new Date()
+// Must exist before loadHostedSync() runs as part of the initial state.
+let currentSession = null
 const state = {
   page: 'dashboard',
   calendarDate: new Date(today.getFullYear(), today.getMonth(), 1),
@@ -11,7 +15,8 @@ const state = {
   calendarExported: false,
   hostedSync: loadHostedSync(),
   hostedSyncStatus: '',
-  data: loadData(),
+  weeklySummary: '',
+  data: { courses: [], homework: [], events: [] },
 }
 
 const icons = {
@@ -28,18 +33,41 @@ const pages = {
   calendar: { label: 'Calendrier', title: 'Calendrier', icon: icons.calendar },
 }
 
+function userStorageKey(key) {
+  const userId = currentSession?.user?.id
+  return storageKeyForUser(key, userId)
+}
+
 function loadData() {
+  const key = userStorageKey(legacyStorageKey)
+  if (!key) return { courses: [], homework: [], events: [] }
   try {
-    const saved = JSON.parse(localStorage.getItem(storageKey))
-    return { courses: Array.isArray(saved?.courses) ? saved.courses : [], homework: Array.isArray(saved?.homework) ? saved.homework : [], events: Array.isArray(saved?.events) ? saved.events : [] }
+    const saved = JSON.parse(localStorage.getItem(key))
+    if (saved) return { courses: Array.isArray(saved.courses) ? saved.courses : [], homework: Array.isArray(saved.homework) ? saved.homework : [], events: Array.isArray(saved.events) ? saved.events : [] }
+    // Preserve data created before authentication existed, but migrate it only
+    // once so it can never appear in another account.
+    const legacy = JSON.parse(localStorage.getItem(legacyStorageKey))
+    if (legacy && !localStorage.getItem(`${legacyStorageKey}:migrated`)) {
+      localStorage.setItem(key, JSON.stringify(legacy))
+      localStorage.setItem(`${legacyStorageKey}:migrated`, '1')
+      return { courses: Array.isArray(legacy.courses) ? legacy.courses : [], homework: Array.isArray(legacy.homework) ? legacy.homework : [], events: Array.isArray(legacy.events) ? legacy.events : [] }
+    }
+    return { courses: [], homework: [], events: [] }
   } catch {
     return { courses: [], homework: [], events: [] }
   }
 }
 
 function loadHostedSync() {
+  const key = userStorageKey(legacySyncStorageKey)
+  if (!key) return null
   try {
-    const config = JSON.parse(localStorage.getItem(syncStorageKey))
+    let config = JSON.parse(localStorage.getItem(key))
+    if (!config && !localStorage.getItem(`${legacySyncStorageKey}:migrated`)) {
+      config = JSON.parse(localStorage.getItem(legacySyncStorageKey))
+      if (config) localStorage.setItem(key, JSON.stringify(config))
+      localStorage.setItem(`${legacySyncStorageKey}:migrated`, '1')
+    }
     return /^[0-9a-f-]{36}$/i.test(config?.calendarId || '') && /^[0-9a-f-]{36}$/i.test(config?.editToken || '') ? config : null
   } catch {
     return null
@@ -47,7 +75,9 @@ function loadHostedSync() {
 }
 
 function saveData() {
-  localStorage.setItem(storageKey, JSON.stringify(state.data))
+  const key = userStorageKey(legacyStorageKey)
+  if (!key) return
+  localStorage.setItem(key, JSON.stringify(state.data))
   queueHostedCalendarSync()
 }
 
@@ -88,7 +118,7 @@ async function activateHostedCalendarSync() {
     await sendHostedCalendar(config)
     state.hostedSync = config
     state.hostedSyncStatus = 'Synchronisation automatique active.'
-    localStorage.setItem(syncStorageKey, JSON.stringify(config))
+    localStorage.setItem(userStorageKey(legacySyncStorageKey), JSON.stringify(config))
     renderPage()
     showToast('Flux automatique créé. Abonne-toi à son URL dans Apple Calendar.')
   } catch (error) {
@@ -203,7 +233,7 @@ function buildIcsEvent({ uid, start, end, summary, description, location = '', r
 function createCalendarFile() {
   const courses = [...state.data.courses].sort((a, b) => `${a.day}${a.time}${a.subject}`.localeCompare(`${b.day}${b.time}${b.subject}`))
   const events = [...state.data.events].sort((a, b) => `${a.date}${a.startTime}${a.title}`.localeCompare(`${b.date}${b.startTime}${b.title}`))
-  const signature = JSON.stringify({ courses, events, includeReviewReminders: state.includeReviewReminders })
+  const signature = JSON.stringify({ courses, homework: state.data.homework, events, includeReviewReminders: state.includeReviewReminders })
   if (signature === state.lastCalendarExportSignature) {
     showToast('Ce fichier a déjà été généré. Modifie un cours avant de créer une nouvelle version.')
     return
@@ -240,6 +270,12 @@ function createCalendarFile() {
       })
     }
   }
+  for (const homework of state.data.homework) {
+    const startDate = homework.dueDate.replaceAll('-', '')
+    const nextDay = dateFromInput(homework.dueDate)
+    nextDay.setDate(nextDay.getDate() + 1)
+    lines.push('BEGIN:VEVENT', `UID:homework-${homework.id}@mon-planning.local`, `DTSTAMP:${formatIcsUtc(new Date())}`, 'SEQUENCE:0', `DTSTART;VALUE=DATE:${startDate}`, `DTEND;VALUE=DATE:${toDateInputValue(nextDay).replaceAll('-', '')}`, `SUMMARY:${escapeIcs(`Devoir à rendre — ${homework.subject}`)}`, `DESCRIPTION:${escapeIcs(homework.title)}`, 'STATUS:CONFIRMED', 'TRANSP:TRANSPARENT', 'X-MON-PLANNING:TRUE', 'END:VEVENT')
+  }
   for (const event of events) {
     const noteText = event.note ? ` ${event.note}` : ''
     lines.push(...buildIcsEvent({
@@ -264,7 +300,7 @@ function createCalendarFile() {
   state.lastCalendarExportSignature = signature
   state.calendarExported = true
   renderPage()
-  const exportedCount = courses.length + events.length
+  const exportedCount = courses.length + state.data.homework.length + events.length
   showToast(`${exportedCount} événement${exportedCount > 1 ? 's' : ''} exporté${exportedCount > 1 ? 's' : ''} vers Apple Calendar.`)
 }
 
@@ -272,7 +308,13 @@ function emptyState(icon, title, text, action = '') {
   return `<div class="empty-state"><span class="empty-icon">${icon}</span><h3>${title}</h3><p>${text}</p>${action}</div>`
 }
 
-document.querySelector('#app').innerHTML = `
+let pageContent
+let pageTitle
+let organizeButton
+let modalBackdrop
+function renderAppShell() {
+  const email = escapeHtml(currentSession?.user?.email || 'Mon compte')
+  document.querySelector('#app').innerHTML = `
   <div class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#dashboard" aria-label="Mon Planning, tableau de bord"><span class="brand-mark">M</span><span>Mon <b>Planning</b></span></a>
@@ -280,7 +322,7 @@ document.querySelector('#app').innerHTML = `
       <nav aria-label="Navigation principale">
         ${Object.entries(pages).map(([key, page]) => `<button class="nav-button" data-page="${key}"><span class="nav-icon">${page.icon}</span><span>${page.label}</span></button>`).join('')}
       </nav>
-      <div class="sidebar-tip"><span>${icons.sparkles}</span><div><strong>Reste organisé</strong><p>Ajoute tes cours et devoirs au fur et à mesure.</p></div></div>
+      <div class="sidebar-tip"><span>${icons.sparkles}</span><div><strong>${email}</strong><button class="account-link" data-sign-out>Se déconnecter</button></div></div>
     </aside>
     <main class="main-content">
       <header class="topbar"><div><p class="greeting">Bonjour ! <span>Prêt·e pour ta journée ?</span></p><h1 id="pageTitle">Tableau de bord</h1></div><div class="header-actions"><button class="button button-secondary" id="organizeButton"><span>${icons.sparkles}</span> Organiser ma semaine</button><button class="button button-primary" data-open-modal="homework"><span>${icons.plus}</span> Ajouter</button></div></header>
@@ -291,12 +333,93 @@ document.querySelector('#app').innerHTML = `
     <div class="modal-backdrop" id="modalBackdrop" hidden></div>
   </div>
 `
+  pageContent = document.querySelector('#pageContent')
+  pageTitle = document.querySelector('#pageTitle')
+  organizeButton = document.querySelector('#organizeButton')
+  modalBackdrop = document.querySelector('#modalBackdrop')
+  organizeButton.addEventListener('click', organizeWeek)
+}
 
-const pageContent = document.querySelector('#pageContent')
-const pageTitle = document.querySelector('#pageTitle')
-const organizeButton = document.querySelector('#organizeButton')
-const modalBackdrop = document.querySelector('#modalBackdrop')
+function renderAuthLoading() {
+  document.querySelector('#app').innerHTML = '<main class="auth-page"><section class="auth-card auth-loading" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><p>Vérification de la session…</p></section></main>'
+}
 
+function renderAuthPage(mode = location.pathname === '/signup' ? 'signup' : 'login', message = '') {
+  const isSignup = mode === 'signup'
+  document.querySelector('#app').innerHTML = `<main class="auth-page"><section class="auth-card"><a class="brand auth-brand" href="/login"><span class="brand-mark">M</span><span>Mon <b>Planning</b></span></a><p class="eyebrow">TON ESPACE PERSONNEL</p><h1>${isSignup ? 'Créer un compte' : 'Bon retour !'}</h1><p class="auth-intro">${isSignup ? 'Organise ta semaine en toute simplicité.' : 'Connecte-toi pour retrouver ton planning.'}</p><form id="authForm" data-mode="${mode}" novalidate><label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254" placeholder="prenom@exemple.fr"></label><label>Mot de passe<div class="password-field"><input name="password" type="password" autocomplete="${isSignup ? 'new-password' : 'current-password'}" required minlength="8" placeholder="Au moins 8 caractères"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>${isSignup ? '<label>Confirmer le mot de passe<div class="password-field"><input name="confirmPassword" type="password" autocomplete="new-password" required minlength="8" placeholder="Retape ton mot de passe"><button type="button" class="password-toggle" data-toggle-password aria-label="Afficher le mot de passe">Afficher</button></div></label>' : ''}<p class="auth-error" id="authError" role="alert">${escapeHtml(message)}</p><button class="button button-primary auth-submit" type="submit">${isSignup ? 'Créer mon compte' : 'Se connecter'}</button></form><p class="auth-switch">${isSignup ? 'Déjà un compte ?' : 'Pas encore de compte ?'} <a href="${isSignup ? '/login' : '/signup'}">${isSignup ? 'Se connecter' : 'Créer un compte'}</a></p></section></main>`
+}
+
+async function refreshAuth() {
+  if (!isAuthConfigured) {
+    const message = authConfiguration.status === 'missing'
+      ? 'L’authentification doit être configurée avant de pouvoir se connecter.'
+      : 'L’URL de Neon Auth est invalide ou indisponible dans ce déploiement.'
+    renderAuthPage(location.pathname === '/signup' ? 'signup' : 'login', message)
+    return
+  }
+  try {
+    currentSession = await getCurrentSession()
+  } catch (error) {
+    console.error('Erreur de vérification de session:', error?.code || error?.name || 'unknown')
+    currentSession = null
+    renderAuthPage('login', 'Impossible de vérifier la session. Réessaie dans un instant.')
+    return
+  }
+  if (!currentSession?.user?.id) {
+    renderAuthPage()
+    return
+  }
+  state.data = loadData()
+  state.hostedSync = loadHostedSync()
+  renderAppShell()
+  renderPage()
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault()
+  const form = event.target
+  const error = document.querySelector('#authError')
+  const submit = form.querySelector('[type="submit"]')
+  const values = new FormData(form)
+  const email = String(values.get('email') || '').trim().toLowerCase()
+  const password = String(values.get('password') || '')
+  const isSignup = form.dataset.mode === 'signup'
+  error.textContent = ''
+  if (!email || !password || !form.checkValidity()) { error.textContent = 'Renseigne une adresse e-mail valide et un mot de passe d’au moins 8 caractères.'; return }
+  if (isSignup && password !== values.get('confirmPassword')) { error.textContent = 'Les mots de passe ne correspondent pas.'; return }
+  submit.disabled = true
+  submit.textContent = isSignup ? 'Création…' : 'Connexion…'
+  try {
+    const result = isSignup ? await signUp(email, password) : await signIn(email, password)
+    if (result?.error) throw result.error
+    const session = await getCurrentSession()
+    if (!session?.user?.id) {
+      if (isSignup) { renderAuthPage('login', 'Compte créé. Vérifie ton e-mail si Neon Auth te le demande, puis connecte-toi.'); return }
+      throw new Error('Connexion impossible. Vérifie tes identifiants puis réessaie.')
+    }
+    currentSession = session
+    history.replaceState({}, '', '/')
+    await refreshAuth()
+  } catch (cause) {
+    error.textContent = formatAuthError(cause)
+    submit.disabled = false
+    submit.textContent = isSignup ? 'Créer mon compte' : 'Se connecter'
+  }
+}
+
+async function handleSignOut() {
+  try {
+    await signOut()
+  } catch (cause) {
+    showToast(formatAuthError(cause, 'La déconnexion a échoué.'))
+    return
+  }
+  currentSession = null
+  state.data = { courses: [], homework: [], events: [] }
+  state.hostedSync = null
+  history.replaceState({}, '', '/login')
+  renderAuthPage('login')
+}
 function renderDashboard() {
   const upcoming = state.data.homework.filter((item) => !item.done).sort((a, b) => a.dueDate.localeCompare(b.dueDate))
   const completed = state.data.homework.filter((item) => item.done).length
@@ -309,7 +432,7 @@ function renderDashboard() {
     </section>
     <section class="panel dashboard-panel"><div class="panel-heading"><div><p class="eyebrow">À NE PAS OUBLIER</p><h2>Prochains devoirs</h2></div><button class="text-button" data-page="homework">Voir tout <span>→</span></button></div>
       ${upcoming.length ? `<div class="compact-list">${upcoming.slice(0, 3).map(homeworkItem).join('')}</div>` : emptyState(icons.empty, 'Rien à rendre pour le moment', 'Ajoute un devoir pour retrouver tes échéances ici.', '<button class="button button-secondary" data-open-modal="homework">Ajouter un devoir</button>')}
-    </section>
+    </section>${state.weeklySummary ? `<section class="panel weekly-summary"><p class="eyebrow">PLAN DE LA SEMAINE</p><h2>Ta priorité</h2><p>${escapeHtml(state.weeklySummary)}</p></section>` : ''}
   `
 }
 
@@ -348,7 +471,7 @@ function renderCalendar() {
     const isToday = dateKey === toDateInputValue(new Date())
     return `<div class="calendar-cell ${isToday ? 'is-today' : ''}"><strong>${day}</strong>${events.map((item) => `<article class="calendar-event personal-event category-${categoryClasses[item.category] || 'other'}" title="${escapeHtml(item.title)} · ${escapeHtml(item.startTime)} à ${escapeHtml(item.endTime)}"><span>${escapeHtml(item.startTime)} ${escapeHtml(item.title)}</span><button data-delete-event="${item.id}" aria-label="Supprimer l’événement ${escapeHtml(item.title)}">${icons.close}</button></article>`).join('')}${homework.map((item) => `<span class="calendar-event school-event ${item.done ? 'is-done' : ''}" title="Devoir · ${escapeHtml(item.subject)} : ${escapeHtml(item.title)}">${escapeHtml(item.subject)}</span>`).join('')}</div>`
   }).join('')
-  const canExport = state.data.courses.length || state.data.events.length
+  const canExport = state.data.courses.length || state.data.homework.length || state.data.events.length
   const reminderOption = state.data.courses.length ? `<label class="toggle-control"><input type="checkbox" data-include-reminders ${state.includeReviewReminders ? 'checked' : ''}><span class="toggle-track"></span><span><strong>Inclure les rappels J+3 / J+7</strong><small>Deux créneaux de révision à 19 h après chaque prochain cours.</small></span></label>` : '<p class="sync-no-reminder">Les rappels J+3 / J+7 sont proposés lorsque ton emploi du temps contient des cours.</p>'
   const syncContent = canExport ? `<div class="sync-actions">${reminderOption}<button class="button button-primary" data-export-calendar><span>⌄</span> Synchroniser avec Apple Calendar</button></div>` : emptyState(icons.calendar, 'Ajoute un événement ou un cours', 'Ton calendrier personnel pourra ensuite être exporté vers Apple Calendar.', '<button class="button button-secondary" data-open-modal="event">Ajouter un événement</button>')
   const exportHelp = state.calendarExported ? `<div class="sync-help"><strong>Fichier généré !</strong><span>Sur Mac, ouvre le fichier téléchargé ou utilise Calendrier → Fichier → Importer. Sur iPhone ou iPad, envoie le fichier .ics vers l’appareil puis ouvre-le depuis Fichiers ou Mail pour l’ajouter à Calendrier.</span></div>` : ''
@@ -394,16 +517,22 @@ function closeModal() {
 }
 
 function organizeWeek() {
-  organizeButton.disabled = true
-  organizeButton.innerHTML = '<span>↻</span> Organisation…'
-  window.setTimeout(() => {
-    organizeButton.disabled = false
-    organizeButton.innerHTML = `<span>${icons.sparkles}</span> Organiser ma semaine`
-    showToast(state.data.courses.length || state.data.homework.length ? 'Ta semaine est organisée avec tes données.' : 'Ajoute des cours ou des devoirs pour organiser ta semaine.')
-  }, 650)
+  const remaining = state.data.homework.filter((item) => !item.done).sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+  if (!remaining.length) {
+    state.weeklySummary = state.data.courses.length ? 'Aucun devoir en attente : profite de tes créneaux de cours pour prendre de l’avance.' : 'Ajoute tes cours ou devoirs pour obtenir des priorités utiles.'
+  } else {
+    const first = remaining[0]
+    const days = Math.round((dateFromInput(first.dueDate).getTime() - new Date(new Date().setHours(0, 0, 0, 0)).getTime()) / 86400000)
+    const urgency = days < 0 ? 'en retard' : days === 0 ? 'à rendre aujourd’hui' : days === 1 ? 'à rendre demain' : `à rendre dans ${days} jours`
+    state.weeklySummary = `Commence par « ${first.title} » en ${first.subject} : ce devoir est ${urgency}. ${remaining.length > 1 ? `${remaining.length - 1} autre${remaining.length > 2 ? 's' : ''} devoir${remaining.length > 2 ? 's' : ''} reste${remaining.length > 2 ? 'nt' : ''} ensuite.` : ' C’est ta seule échéance en attente.'}`
+  }
+  renderPage()
 }
 
 document.addEventListener('click', (event) => {
+  const togglePassword = event.target.closest('[data-toggle-password]')
+  if (togglePassword) { const input = togglePassword.parentElement.querySelector('input'); input.type = input.type === 'password' ? 'text' : 'password'; togglePassword.textContent = input.type === 'password' ? 'Afficher' : 'Masquer'; return }
+  if (event.target.closest('[data-sign-out]')) { void handleSignOut(); return }
   const pageButton = event.target.closest('[data-page]')
   if (pageButton) { state.page = pageButton.dataset.page; renderPage(); return }
   const modalButton = event.target.closest('[data-open-modal]')
@@ -435,6 +564,7 @@ document.addEventListener('change', (event) => {
 })
 
 document.addEventListener('submit', (event) => {
+  if (event.target.id === 'authForm') { void handleAuthSubmit(event); return }
   if (event.target.id !== 'addForm') return
   event.preventDefault()
   const form = new FormData(event.target)
@@ -446,6 +576,5 @@ document.addEventListener('submit', (event) => {
   saveData(); closeModal(); renderPage(); showToast(event.target.dataset.type === 'homework' ? 'Devoir ajouté à ta liste.' : event.target.dataset.type === 'event' ? 'Événement ajouté à ton calendrier.' : 'Cours ajouté à ton emploi du temps.')
 })
 
-organizeButton.addEventListener('click', organizeWeek)
-renderPage()
-
+renderAuthLoading()
+refreshAuth()

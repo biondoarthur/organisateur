@@ -6,7 +6,7 @@ function escapeIcs(value = '') {
 }
 
 function formatLocal(date) {
-  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}00`
+  return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}${String(date.getUTCDate()).padStart(2, '0')}T${String(date.getUTCHours()).padStart(2, '0')}${String(date.getUTCMinutes()).padStart(2, '0')}00`
 }
 
 function formatUtc(date) {
@@ -16,17 +16,20 @@ function formatUtc(date) {
 function nextCourseDate(course) {
   const [hours, minutes] = course.time.split(':').map(Number)
   const date = new Date()
-  const daysUntilCourse = (courseWeekdays[course.day] - date.getDay() + 7) % 7
-  date.setDate(date.getDate() + daysUntilCourse)
-  date.setHours(hours, minutes, 0, 0)
-  if (date <= new Date()) date.setDate(date.getDate() + 7)
+  // Calendar values are deliberately represented as French wall time through
+  // UTC components, then emitted with TZID below. This avoids Vercel's UTC
+  // runtime shifting a 09:00 Paris course into a different hour.
+  const daysUntilCourse = (courseWeekdays[course.day] - date.getUTCDay() + 7) % 7
+  date.setUTCDate(date.getUTCDate() + daysUntilCourse)
+  date.setUTCHours(hours, minutes, 0, 0)
+  if (date <= new Date()) date.setUTCDate(date.getUTCDate() + 7)
   return date
 }
 
 function eventDateTime(event, field) {
   const [year, month, day] = event.date.split('-').map(Number)
   const [hours, minutes] = event[field].split(':').map(Number)
-  return new Date(year, month - 1, day, hours, minutes, 0, 0)
+  return new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0))
 }
 
 function foldLine(line) {
@@ -49,7 +52,7 @@ function foldLine(line) {
 }
 
 function eventLines({ uid, start, end, summary, description, location = '', recurrence = '' }) {
-  const lines = ['BEGIN:VEVENT', `UID:${uid}@mon-planning.local`, `DTSTAMP:${formatUtc(new Date())}`, 'SEQUENCE:0', `DTSTART:${formatLocal(start)}`, `DTEND:${formatLocal(end)}`, `SUMMARY:${escapeIcs(summary)}`, `DESCRIPTION:${escapeIcs(description)}`, 'STATUS:CONFIRMED', 'TRANSP:OPAQUE', 'X-MON-PLANNING:TRUE']
+  const lines = ['BEGIN:VEVENT', `UID:${uid}@mon-planning.local`, `DTSTAMP:${formatUtc(new Date())}`, 'SEQUENCE:0', `DTSTART;TZID=Europe/Paris:${formatLocal(start)}`, `DTEND;TZID=Europe/Paris:${formatLocal(end)}`, `SUMMARY:${escapeIcs(summary)}`, `DESCRIPTION:${escapeIcs(description)}`, 'STATUS:CONFIRMED', 'TRANSP:OPAQUE', 'X-MON-PLANNING:TRUE']
   if (location) lines.splice(7, 0, `LOCATION:${escapeIcs(location)}`)
   if (recurrence) lines.splice(7, 0, recurrence)
   lines.push('END:VEVENT')
@@ -57,11 +60,12 @@ function eventLines({ uid, start, end, summary, description, location = '', recu
 }
 
 function allDayEventLines(homework) {
-  const dueDate = new Date(`${homework.dueDate}T12:00:00`)
+  const [year, month, day] = homework.dueDate.split('-').map(Number)
+  const dueDate = new Date(Date.UTC(year, month - 1, day, 12))
   const followingDay = new Date(dueDate)
   followingDay.setDate(followingDay.getDate() + 1)
   const date = homework.dueDate.replaceAll('-', '')
-  const endDate = `${followingDay.getFullYear()}${String(followingDay.getMonth() + 1).padStart(2, '0')}${String(followingDay.getDate()).padStart(2, '0')}`
+  const endDate = `${followingDay.getUTCFullYear()}${String(followingDay.getUTCMonth() + 1).padStart(2, '0')}${String(followingDay.getUTCDate()).padStart(2, '0')}`
   return ['BEGIN:VEVENT', `UID:homework-${homework.id}@mon-planning.local`, `DTSTAMP:${formatUtc(new Date())}`, 'SEQUENCE:0', `DTSTART;VALUE=DATE:${date}`, `DTEND;VALUE=DATE:${endDate}`, `SUMMARY:${escapeIcs(`Devoir à rendre — ${homework.subject}`)}`, `DESCRIPTION:${escapeIcs(homework.title)}`, 'STATUS:CONFIRMED', 'TRANSP:TRANSPARENT', 'X-MON-PLANNING:TRUE', 'END:VEVENT']
 }
 
@@ -77,8 +81,8 @@ export function buildCalendarIcs(calendar) {
     lines.push(...eventLines({ uid: `course-${course.id}`, start, end, summary: course.subject, description: `Cours de ${course.subject}, le ${course.day} à ${course.time}.${course.room ? ` Salle : ${course.room}.` : ''} Ajouté depuis Mon Planning.`, location: course.room, recurrence: `RRULE:FREQ=WEEKLY;BYDAY=${icsWeekdays[course.day]}` }))
     if (calendar.includeReviewReminders) [3, 7].forEach((daysAfter) => {
       const reminderStart = new Date(start)
-      reminderStart.setDate(reminderStart.getDate() + daysAfter)
-      reminderStart.setHours(19, 0, 0, 0)
+      reminderStart.setUTCDate(reminderStart.getUTCDate() + daysAfter)
+      reminderStart.setUTCHours(19, 0, 0, 0)
       lines.push(...eventLines({ uid: `revision-${course.id}-${daysAfter}`, start: reminderStart, end: new Date(reminderStart.getTime() + 30 * 60 * 1000), summary: `Réviser ${course.subject} — cours du ${course.day.toLowerCase()}`, description: `Rappel J+${daysAfter} : révise ${course.subject}, après le cours du ${course.day} à ${course.time}.` }))
     })
   })
