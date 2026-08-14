@@ -18,6 +18,7 @@ export default async function handler(request, response) {
     return response.status(200).send(buildCalendarIcs(result[0].calendar))
   } catch (error) {
     console.error('Calendar feed error', error)
+    if (error?.code === '42P01') return response.status(404).send('Calendrier introuvable.')
     return response.status(500).send('Impossible de générer le calendrier.')
   }
 }
